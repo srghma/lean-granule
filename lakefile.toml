@@ -1,0 +1,20 @@
+name = "RequestProject"
+defaultTargets = ["RequestProject"]
+testDriver = "granule-test"
+
+[[require]]
+name = "mathlib"
+git = "https://github.com/leanprover-community/mathlib4.git"
+rev = "v4.28.0"
+
+[[lean_lib]]
+name = "RequestProject"
+globs = ["RequestProject.+"]
+
+[[lean_exe]]
+name = "granule"
+root = "RequestProject.Granule.Cli"
+
+[[lean_exe]]
+name = "granule-test"
+root = "RequestProject.Granule.Test"
