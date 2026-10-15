@@ -1,0 +1,4 @@
+import bogus
+
+foo : Int
+foo = 0

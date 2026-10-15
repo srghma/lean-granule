@@ -1,0 +1,4 @@
+-- gr --no-eval
+
+tst : Int [1 : Ext Nat] → Int
+tst [x] = x

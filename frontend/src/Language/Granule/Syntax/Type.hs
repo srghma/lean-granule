@@ -1,0 +1,585 @@
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE RankNTypes #-}
+
+-- Syntax of types
+
+module Language.Granule.Syntax.Type where
+
+import Language.Granule.Syntax.FirstParameter
+import Language.Granule.Syntax.Helpers
+import Language.Granule.Syntax.Identifiers
+import Language.Granule.Syntax.Span
+
+import Data.Functor.Identity (runIdentity)
+import GHC.Generics (Generic)
+import Data.Data
+import Data.Functor.Const
+
+-- # Core representation
+
+{-| Types.
+Example: `List n Int` in Granule
+         is `TyApp (TyApp (TyCon "List") (TyVar "n")) (TyCon "Int") :: Type`
+-}
+
+-- Aliases that can be useful in some places as documentation
+type Coeffect = Type
+type Effect   = Type
+type Guarantee = Type
+type Permission = Type
+type Kind     = Type
+
+-- Represents polairty information for lattices
+data Polarity = Normal | Opposite
+ deriving (Eq, Show, Ord, Data, Typeable)
+
+-- | Type syntax (includes effect, coeffect, and predicate terms)
+data Type where
+    Type    :: Int -> Type                          -- ^ Universe construction
+    FunTy   :: Maybe Id -> Maybe Coeffect -> Type -> Type -> Type     -- ^ Function type
+
+    TyCon   :: Id -> Type                           -- ^ Type constructor
+    Box     :: Coeffect -> Type -> Type             -- ^ Graded modal necessity
+    Diamond :: Effect   -> Type -> Type             -- ^ Graded modal possibility
+    Star    :: Guarantee -> Type -> Type
+    Borrow  :: Permission -> Type -> Type
+    TyVar   :: Id -> Type                           -- ^ Type variable
+    TyApp   :: Type -> Type -> Type                 -- ^ Type application
+    TyInt   :: Int -> Type                          -- ^ Type-level Int
+    TyRational :: Rational -> Type                  -- ^ Type-level Rational
+    TyFraction :: Rational -> Type
+    TyGrade :: Maybe Type -> Int -> Type            -- ^ Graded element
+    TyInfix :: TypeOperator -> Type -> Type -> Type -- ^ Infix type operator
+
+    TySet   :: Polarity -> [Type] -> Type     -- ^ Type-level set
+    TyCase  :: Type -> [(Type, Type)] -> Type -- ^ Type-level case
+
+    TySig   :: Type -> Kind -> Type           -- ^ Kind signature
+    TyExists :: Id -> Kind -> Type -> Type    -- ^ Exists
+    TyForall :: Id -> Kind -> Type -> Type    -- ^ RankNForall
+    TyName :: Int -> Type
+
+deriving instance Show Type
+deriving instance Eq Type
+deriving instance Ord Type
+deriving instance Data Type
+deriving instance Typeable Type
+
+-- Constructors and operators are just strings
+data TypeOperator
+  = TyOpLesserNat
+  | TyOpLesserEq
+  | TyOpLesserEqNat
+  | TyOpGreaterNat
+  | TyOpGreaterEq
+  | TyOpGreaterEqNat
+  | TyOpEq
+  | TyOpNotEq
+  | TyOpPlus
+  | TyOpTimes
+  | TyOpMinus
+  | TyOpExpon
+  | TyOpMeet
+  | TyOpJoin
+  | TyOpInterval
+  | TyOpConverge
+  | TyOpImpl
+  | TyOpHsup
+  | TyOpMutable
+  deriving (Eq, Ord, Show, Data)
+
+-- ## Type schemes
+
+-- | Represent types with a universal quantification at the start
+data TypeScheme =
+  Forall
+    Span          -- span of the scheme
+    [(Id, Kind)]  -- binders
+    [Type]      -- constraints
+    Type      -- type
+  deriving (Eq, Show, Generic, Data)
+
+instance FirstParameter TypeScheme Span
+
+trivialScheme :: Type -> TypeScheme
+trivialScheme = Forall nullSpanNoFile [] []
+
+unforall :: TypeScheme -> Type
+unforall (Forall _ _ _ t) = t
+
+isMultiArity :: TypeScheme -> Bool
+isMultiArity (Forall _ _ _ t) = isMultiArity' t
+  where
+    isMultiArity' (FunTy _ _ x (FunTy _ _ y t)) = True
+    isMultiArity' _ = False
+
+----------------------------------------------------------------------
+-- # Smart constructors
+
+-- | Smart constructors for function types (with no grade)
+funTy :: Type -> Type -> Type
+funTy = FunTy Nothing Nothing
+
+(.->) :: Type -> Type -> Type
+s .-> t = FunTy Nothing Nothing s t
+infixr 1 .->
+
+-- | Smart constructor for constructors and variable
+tyCon :: String -> Type
+tyCon = TyCon . mkId
+
+tyVar :: String -> Type
+tyVar = TyVar . mkId
+
+-- | Smart constructor for type application
+(.@) :: Type -> Type -> Type
+s .@ t = TyApp s t
+infixl 9 .@
+
+-- | Smart constructors for constants and things at different levels
+
+ktype :: Type
+ktype = Type 0
+
+kcoeffect :: Type
+kcoeffect = tyCon "Coeffect"
+
+keffect :: Type
+keffect = tyCon "Effect"
+
+kguarantee :: Type
+kguarantee = tyCon "Guarantee"
+
+kpermission :: Type
+kpermission = tyCon "Permission"
+
+kpredicate :: Type
+kpredicate = tyCon "Predicate"
+
+kNat, protocol :: Type
+kNat     = tyCon "Nat"
+protocol = tyCon "Protocol"
+
+nat, extendedNat :: Type
+nat = tyCon "Nat"
+extendedNat = TyApp (tyCon "Ext") (tyCon "Nat")
+
+level :: Type
+level = tyCon "Level"
+
+infinity :: Type
+infinity = tyCon "Infinity"
+
+uniqueness :: Type
+uniqueness = tyCon "Uniqueness"
+
+isInterval :: Type -> Maybe Type
+isInterval (TyApp (TyCon c) t) | internalName c == "Interval" = Just t
+isInterval _ = Nothing
+
+isExt :: Type -> Maybe Type
+isExt (TyApp (TyCon c) t) | internalName c == "Ext" = Just t
+isExt _ = Nothing
+
+isSet :: Type -> Maybe (Type, Polarity)
+isSet (TyApp (TyCon c) t) | internalName c == "Set"   = Just (t, Normal)
+isSet (TyApp (TyCon c) t) | internalName c == "SetOp" = Just (t, Opposite)
+isSet _ = Nothing
+
+setConstructor :: Polarity -> Type
+setConstructor Normal   = TyCon $ mkId "Set"
+setConstructor Opposite = TyCon $ mkId "SetOp"
+
+isProduct :: Type -> Maybe (Type, Type)
+isProduct (TyApp (TyApp (TyCon c) t) t')
+  | internalName c == "×" || internalName c == "," || internalName c == ",," =
+    Just (t, t')
+isProduct _ = Nothing
+
+----------------------------------------------------------------------
+-- # Helpers
+
+-- Calculate whether a type could be used a generic semiring/grade expression
+isGenericCoeffectExpression :: Type -> Bool
+isGenericCoeffectExpression (TyGrade Nothing _) = True
+isGenericCoeffectExpression (TyInfix TyOpPlus c1 c2) =
+  isGenericCoeffectExpression c1 && isGenericCoeffectExpression c2
+isGenericCoeffectExpression (TyInfix TyOpTimes c1 c2) =
+  isGenericCoeffectExpression c1 && isGenericCoeffectExpression c2
+isGenericCoeffectExpression (TyInfix TyOpMeet c1 c2) =
+  isGenericCoeffectExpression c1 && isGenericCoeffectExpression c2
+isGenericCoeffectExpression (TyInfix TyOpJoin c1 c2) =
+  isGenericCoeffectExpression c1 && isGenericCoeffectExpression c2
+isGenericCoeffectExpression _ = False
+
+-- Contains signature?
+containsTypeSig :: Type -> Bool
+containsTypeSig =
+  runIdentity . typeFoldM (TypeFold
+      { tfTy = \_ -> return False
+      , tfFunTy = \_ c x y -> return (x || y)
+      , tfTyCon = \_ -> return False
+      , tfBox = \x y -> return (x || y)
+      , tfDiamond = \x y -> return (x || y)
+      , tfStar = \x y -> return (x || y)
+      , tfBorrow = \x y -> return (x || y)
+      , tfTyVar = \_ -> return False
+      , tfTyApp = \x y -> return (x || y)
+      , tfTyInt = \_ -> return False
+      , tfTyRational = \_ -> return False
+      , tfTyFraction = \_ -> return False
+      , tfTyGrade = \_ _ -> return False
+      , tfTyInfix = \_ x y -> return (x || y)
+      , tfSet = \_ _ -> return  False
+      , tfTyCase = \_ _ -> return False
+      , tfTySig = \_ _ _ -> return True
+      , tfTyExists = \_ _ x -> return x
+      , tfTyForall = \_ _ x -> return x
+      , tfTyName = \_ -> return False})
+
+-- | Compute the arity of a function type
+arity :: Type -> Int
+arity (FunTy _ _ _ t) = 1 + arity t
+arity _               = 0
+
+-- | Get the result type after the last Arrow, e.g. for @a -> b -> Pair a b@
+-- the result type is @Pair a b@
+resultType :: Type -> Type
+resultType (FunTy _ _ _ t) = resultType t
+-- jump over type abstractions
+resultType (TyForall _ _ t) = resultType t
+resultType t = t
+
+-- Given a function type, return a list of the parameter tpes
+parameterTypes :: Type -> [Type]
+parameterTypes (FunTy _ _ t1 t2) = t1 : parameterTypes t2
+parameterTypes t                 = []
+
+-- Given a function type, return a list of named parameter types
+-- generating some fresh names if no names are given
+parameterTypesWithNames :: Type -> [(Id, Type)]
+parameterTypesWithNames = aux 0
+  where
+    aux seed (FunTy (Just n) _ t1 t2) = (n, t1) : aux seed t2
+    aux seed (FunTy Nothing  _ t1 t2) = (mkId ("a" <> show seed), t1) : aux (seed + 1) t2
+    aux _ _                         = []
+
+-- | Get the leftmost type of an application
+-- >>> leftmostOfApplication $ TyCon (mkId ",") .@ TyCon (mkId "Bool") .@ TyCon (mkId "Bool")
+-- TyCon (Id "," ",")
+leftmostOfApplication :: Type -> Type
+leftmostOfApplication (TyApp t _) = leftmostOfApplication t
+leftmostOfApplication t = t
+
+typeArguments :: Type -> [Type]
+typeArguments (TyApp t1 t2) = typeArguments t1 ++ [t2]
+typeArguments _            = []
+
+freeAtomsVars :: Type -> [Id]
+freeAtomsVars (TyVar v) = [v]
+freeAtomsVars (TyApp t1 (TyVar v)) = v : freeAtomsVars t1
+freeAtomsVars (TyApp t1 _) = freeAtomsVars t1
+freeAtomsVars t = []
+
+----------------------------------------------------------------------
+-- # Type fold
+
+
+-- Trivially effectful monadic constructors
+mTy :: Monad m => Int -> m Type
+mTy          = return . Type
+mFunTy :: Monad m => Maybe Id -> Maybe Coeffect -> Type -> Type -> m Type
+mFunTy v mg x y   = return (FunTy v mg x y)
+mTyCon :: Monad m => Id -> m Type
+mTyCon       = return . TyCon
+mBox :: Monad m => Coeffect -> Type -> m Type
+mBox c y     = return (Box c y)
+mDiamond :: Monad m => Type -> Type -> m Type
+mDiamond e y = return (Diamond e y)
+mStar :: Monad m => Guarantee -> Type -> m Type
+mStar g y    = return (Star g y)
+mBorrow :: Monad m => Permission -> Type -> m Type
+mBorrow p y = return (Borrow p y)
+mTyVar :: Monad m => Id -> m Type
+mTyVar       = return . TyVar
+mTyApp :: Monad m => Type -> Type -> m Type
+mTyApp x y   = return (TyApp x y)
+mTyInt :: Monad m => Int -> m Type
+mTyInt       = return . TyInt
+mTyRational :: Monad m => Rational -> m Type
+mTyRational          = return . TyRational
+mTyFraction :: Monad m => Rational -> m Type
+mTyFraction  = return . TyFraction
+mTyGrade :: Monad m => Maybe Type -> Int -> m Type
+mTyGrade t c = return $ TyGrade t c
+mTyInfix :: Monad m => TypeOperator -> Type -> Type -> m Type
+mTyInfix op x y  = return (TyInfix op x y)
+mTySet   :: Monad m => Polarity -> [Type] -> m Type
+mTySet p xs    = return (TySet p xs)
+mTyCase :: Monad m => Type -> [(Type, Type)] -> m Type
+mTyCase x cs = return (TyCase x cs)
+mTySig   :: Monad m => Type -> Type -> Type -> m Type
+mTySig t _ k      = return (TySig t k)
+mTyExists :: Monad m => Id -> Kind -> Type -> m Type
+mTyExists v k t   = return (TyExists v k t)
+mTyForall :: Monad m => Id -> Kind -> Type -> m Type
+mTyForall v k t   = return (TyForall v k t)
+mTyName :: Monad m => Int -> m Type
+mTyName = return . TyName
+
+-- Monadic algebra for types
+data TypeFold m a = TypeFold
+  { tfTy      :: Int                -> m a
+  , tfFunTy   :: Maybe Id -> Maybe a -> a -> a -> m a
+  , tfTyCon   :: Id                 -> m a
+  , tfBox     :: a -> a             -> m a
+  , tfDiamond :: a -> a             -> m a
+  , tfStar    :: a -> a             -> m a
+  , tfBorrow  :: a -> a             -> m a
+  , tfTyVar   :: Id                 -> m a
+  , tfTyApp   :: a -> a             -> m a
+  , tfTyInt   :: Int                -> m a
+  , tfTyRational :: Rational        -> m a
+  , tfTyFraction :: Rational        -> m a
+  , tfTyGrade :: Maybe a   -> Int  -> m a
+  , tfTyInfix :: TypeOperator -> a -> a -> m a
+  , tfSet     :: Polarity -> [a]    -> m a
+  , tfTyCase  :: a -> [(a, a)]      -> m a
+  , tfTySig   :: a -> Type -> (a -> m a)
+  , tfTyExists :: Id -> a -> a      -> m a
+  , tfTyForall :: Id -> a -> a      -> m a
+  , tfTyName :: Int -> m a
+  }
+
+-- Base monadic algebra
+baseTypeFold :: Monad m => TypeFold m Type --Type
+baseTypeFold =
+  TypeFold mTy mFunTy mTyCon mBox mDiamond mStar mBorrow mTyVar mTyApp mTyInt mTyRational mTyFraction mTyGrade mTyInfix mTySet mTyCase mTySig mTyExists mTyForall mTyName
+
+-- | Monadic fold on a `Type` value
+typeFoldM :: forall m a . Monad m => TypeFold m a -> Type -> m a
+typeFoldM algebra = go
+  where
+   go :: Type -> m a
+   go (Type l) = tfTy algebra l
+   go (FunTy v coeff t1 t2) = do
+     t1' <- go t1
+     t2' <- go t2
+     coeff' <- maybe (return Nothing) (fmap Just . go) coeff
+     tfFunTy algebra v coeff' t1' t2'
+   go (TyCon s) = tfTyCon algebra s
+   go (Box c t) = do
+     c' <- go c
+     t' <- go t
+     tfBox algebra c' t'
+   go (Diamond e t) = do
+     t' <- go t
+     e' <- go e
+     tfDiamond algebra e' t'
+   go (Star g t) = do
+     t' <- go t
+     g' <- go g
+     tfStar algebra g' t'
+   go (Borrow p t) = do
+     t' <- go t
+     p' <- go p
+     tfBorrow algebra p' t'
+   go (TyVar v) = tfTyVar algebra v
+   go (TyApp t1 t2) = do
+     t1' <- go t1
+     t2' <- go t2
+     tfTyApp algebra t1' t2'
+   go (TyInt i) = tfTyInt algebra i
+   go (TyRational i) = tfTyRational algebra i
+   go (TyFraction i) = tfTyFraction algebra i
+   go (TyGrade Nothing i) = tfTyGrade algebra Nothing i
+   go (TyGrade (Just t) i) = do
+     t' <- go t
+     tfTyGrade algebra (Just t') i
+   go (TyInfix op t1 t2) = do
+     t1' <- go t1
+     t2' <- go t2
+     tfTyInfix algebra op t1' t2'
+   go (TySet p ts) = do
+    ts' <- mapM go ts
+    tfSet algebra p ts'
+   go (TySig t k) = do
+     t' <- go t
+     k' <- go k
+     -- This part of the fold is a bit different:
+     -- actually pass the original type in here as well
+     tfTySig algebra t' t k'
+   go (TyCase t ts) = do
+    t' <- go t
+    ts' <- mapM (\(a,b) -> extractMonad (go a, go b)) ts
+    tfTyCase algebra t' ts'
+    where
+     extractMonad (a,b) = do
+      a' <- a
+      b' <- b
+      return (a', b')
+   go (TyExists var k t) = do
+    k' <- go k
+    t' <- go t
+    tfTyExists algebra var k' t'
+   go (TyForall var k t) = do
+    k' <- go k
+    t' <- go t
+    tfTyForall algebra var k' t'
+   go (TyName i) = tfTyName algebra i
+
+----------------------------------------------------------------------
+-- # Types are terms
+
+instance Term Type where
+    freeVars = getConst . runIdentity . typeFoldM TypeFold
+      { tfTy      = \_ -> return (Const [])
+      , tfFunTy   = \_ _ (Const x) (Const y) -> return $ Const (x <> y)
+      , tfTyCon   = \_ -> return (Const []) -- or: const (return [])
+      , tfBox     = \(Const c) (Const t) -> return $ Const (c <> t)
+      , tfDiamond = \(Const e) (Const t) -> return $ Const (e <> t)
+      , tfStar    = \(Const g) (Const t) -> return $ Const (g <> t)
+      , tfBorrow  = \(Const p) (Const t) -> return $ Const (p <> t)
+      , tfTyVar   = \v -> return $ Const [v] -- or: return . return
+      , tfTyApp   = \(Const x) (Const y) -> return $ Const (x <> y)
+      , tfTyInt   = \_ -> return (Const [])
+      , tfTyRational  = \_ -> return (Const [])
+      , tfTyFraction = \_ -> return (Const [])
+      , tfTyGrade     = \_ _ -> return (Const [])
+      , tfTyInfix = \_ (Const y) (Const z) -> return $ Const (y <> z)
+      , tfSet     = \_ -> return . Const . concatMap getConst
+      , tfTyCase  = \(Const t) cs -> return . Const $ t <> (concat . concat) [[a,b] | (Const a, Const b) <- cs]
+      , tfTySig   = \(Const t) _ (Const k) -> return $ Const (t <> k)
+      , tfTyExists = \v _ (Const fvs) -> return $ Const [v' | v' <- fvs, v /= v']
+      , tfTyForall = \v _ (Const fvs) -> return $ Const [v' | v' <- fvs, v /= v']
+      , tfTyName = \_ -> return (Const [])
+      }
+
+    isLexicallyAtomic TyInt{} = True
+    isLexicallyAtomic TyRational{} = True
+    isLexicallyAtomic TyFraction{} = True
+    isLexicallyAtomic TyGrade{} = True
+    isLexicallyAtomic TyVar{} = True
+    isLexicallyAtomic TySet{} = True
+    isLexicallyAtomic TyCon{} = True
+    isLexicallyAtomic (Type 0) = True
+    isLexicallyAtomic (TyApp (TyApp (TyCon (sourceName -> ",")) _) _) = True
+    isLexicallyAtomic TyName{} = True
+    isLexicallyAtomic _ = False
+
+substType :: Type -> Id -> Type -> Type
+substType t x t' = runIdentity $ typeFoldM (baseTypeFold { tfTyVar = varCase }) t'
+  where
+    varCase x'
+      | internalName x == internalName x' = return t
+      | otherwise                         = return $ TyVar x'
+
+----------------------------------------------------------------------
+-- Freshenable instances
+
+instance Freshenable m TypeScheme where
+  freshen :: Monad m => TypeScheme -> Freshener m TypeScheme
+  freshen (Forall s binds constraints ty) = do
+        binds' <- mapM (\(v, k) -> do { v' <- freshIdentifierBase TypeL v;
+                                        k' <- freshen k;
+                                        return (v', k') }) binds
+        constraints' <- mapM freshen constraints
+        ty' <- freshen ty
+        return $ Forall s binds' constraints' ty'
+
+instance Freshenable m Type where
+  freshen =
+    typeFoldM (baseTypeFold { tfTyVar = freshenTyVar,
+                              tfBox = freshenTyBox,
+                              tfTySig = freshenTySig,
+                              tfTyExists = freshenTyExists,
+                              tfTyForall = freshenTyForall })
+    where
+
+      freshenTyBox c t = do
+        c' <- freshen c
+        t' <- freshen t
+        return $ Box c' t'
+
+      freshenTyExists v k t =
+        freshIdentifierBaseInScope TypeL v (\v' -> do
+            k' <- freshen k
+            t' <- freshen t
+            return $ TyExists v' k' t')
+
+      freshenTyForall v k t =
+        freshIdentifierBaseInScope TypeL v (\v' -> do
+            k' <- freshen k
+            t' <- freshen t
+            return $ TyForall v' k' t')
+
+      freshenTySig t' _ k = do
+        k' <- freshen k
+        return $ TySig t' k'
+
+      freshenTyVar v = do
+        v' <- lookupVar TypeL v
+        case v' of
+           Just v' -> return (TyVar $ Id (sourceName v) v')
+           -- This case happens if we are referring to a defined
+           -- function which does not get its name freshened
+           Nothing -> return (TyVar $ mkId (sourceName v))
+
+----------------------------------------------------------------------
+
+-- | Normalise a coeffect using the semiring laws and some
+--   local evaluation of natural numbers
+--   There is plenty more scope to make this more comprehensive
+--   None of this is stricly necessary but it improves type errors
+--   and speeds up some constraint solving.
+normalise :: Type -> Type
+normalise (TyInfix TyOpPlus (TyRational n) (TyRational m)) = TyRational (n + m)
+normalise (TyInfix TyOpTimes (TyRational n) (TyRational m)) = TyRational (n * m)
+
+normalise (TyInfix TyOpPlus (TyFraction n) (TyFraction m)) = TyFraction (n + m)
+normalise (TyInfix TyOpTimes (TyFraction n) (TyFraction m)) = TyFraction (n * m)
+
+-- exempt Uniquness from multiplicative unit
+normalise g@(TyInfix TyOpTimes r (TyGrade (Just (TyCon (internalName -> "Uniqueness"))) 1)) = g
+normalise g@(TyInfix TyOpTimes (TyGrade (Just (TyCon (internalName -> "Uniqueness"))) 1) r) = g
+-- exempt Level from multiplicative unit
+normalise g@(TyInfix TyOpTimes r (TyGrade (Just (TyCon (internalName -> "Level"))) 1)) = g
+normalise g@(TyInfix TyOpTimes (TyGrade (Just (TyCon (internalName -> "Level"))) 1) r) = g
+-- simple units
+normalise (TyInfix TyOpTimes r (TyGrade _ 1)) = r
+normalise (TyInfix TyOpTimes (TyGrade _ 1) r) = r
+normalise (TyInfix TyOpPlus r (TyGrade _ 0)) = r
+normalise (TyInfix TyOpPlus (TyGrade _ 0) r) = r
+
+normalise (TyInfix TyOpPlus (TyGrade nat@(Just (TyCon (internalName -> "Nat"))) n)
+                            (TyGrade (Just (TyCon (internalName -> "Nat"))) m)) = TyGrade nat (n + m)
+normalise (TyInfix TyOpPlus (TyInt n) (TyInt m)) = TyInt (n + m)
+normalise (TyInfix TyOpTimes (TyInt n) (TyInt m)) = TyInt (n * m)
+normalise (TyInfix TyOpPlus n m) =
+    if (n == n') && (m == m')
+    then TyInfix TyOpPlus n m
+    else normalise (TyInfix TyOpPlus n' m')
+  where
+    n' = normalise n
+    m' = normalise m
+normalise (TyInfix TyOpTimes n m) =
+    if (n == n') && (m == m')
+    then TyInfix TyOpTimes n m
+    else normalise (TyInfix TyOpTimes n' m')
+  where
+    n' = normalise n
+    m' = normalise m
+-- Push signatures in
+normalise (TySig (TyInfix TyOpPlus c1 c2) k) = TyInfix TyOpPlus (TySig (normalise c1) k) (TySig (normalise c2) k)
+normalise (TySig (TyInfix TyOpTimes c1 c2) k) = TyInfix TyOpTimes (TySig (normalise c1) k) (TySig (normalise c2) k)
+normalise (TySig (TyInfix TyOpMeet c1 c2) k) = TyInfix TyOpMeet (TySig (normalise c1) k) (TySig (normalise c2) k)
+normalise (TySig (TyInfix TyOpJoin c1 c2) k) = TyInfix TyOpJoin (TySig (normalise c1) k) (TySig (normalise c2) k)
+normalise c = c

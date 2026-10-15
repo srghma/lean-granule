@@ -1,0 +1,8 @@
+data Eq : Type -> Type -> Type where
+  Refl : forall {a : Type} . Eq a a
+
+sym : ∀ {a : Type, b : Type} . Eq a b -> Eq b a
+sym Refl = Refl
+
+trans : ∀ {a : Type, b : Type, c : Type} . Eq a b -> Eq b c -> Eq a c
+trans Refl Refl = Refl

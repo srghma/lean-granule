@@ -1,0 +1,836 @@
+-- Provides all the type information for built-ins
+
+{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE DataKinds #-}
+
+-- | Primitive data types and type constructors
+module Language.Granule.Checker.Primitives where
+
+import Data.List.NonEmpty (NonEmpty(..))
+import Text.RawString.QQ (r)
+
+import Language.Granule.Syntax.Def
+import Language.Granule.Syntax.Identifiers
+import Language.Granule.Syntax.Parser (parseDefs)
+import Language.Granule.Syntax.Type
+import Language.Granule.Syntax.Span
+import Language.Granule.Syntax.Expr (Operator(..))
+import Language.Granule.Utils
+
+nullSpanBuiltin :: Span
+nullSpanBuiltin = Span (0, 0) (0, 0) "Builtin"
+
+-- A list of type alias as Id -> ([Tyvar], Type) pairs
+typeAliases :: [(Id, ([Id], Type))]
+typeAliases =
+    -- IO = {p | p in IOElem}
+    [(mkId "IO", ([], TySet Normal (map tyCon ioElems)))
+    ,(mkId "Inverse", ([mkId "a"], FunTy Nothing Nothing (TyVar $ mkId "a") (TyCon $ mkId "()")))
+    ,(mkId "Pushable", ([mkId "a"], TyInfix TyOpHsup (tyVar "a") (tyVar "a")))
+    ]
+  where
+    ioElems = ["Stdout", "Stdin", "Stderr", "Open", "Read", "Write", "IOExcept", "Close"]
+
+-- List of those things which are 'physical' resource (i.e., not dropable)
+nonDropable :: [Id]
+nonDropable = [mkId "Handle", mkId "LChan", mkId "Chan"]
+
+capabilities :: [(Id, Type)]
+capabilities =
+   [(mkId "Console", funTy (tyCon "String") (tyCon "()"))
+  , (mkId "TimeDate", funTy (tyCon "()") (tyCon "String"))]
+
+overlapsAllowed :: [Id]
+overlapsAllowed =
+  [mkId "One", mkId "Private", mkId "Public", mkId "Unused", mkId "Set", mkId "SetOp"]
+
+-- Associates type constuctors names to their:
+--    * kind
+--    * list of (finite) matchable constructor names (but not the actual set of constructor names which could be infinite)
+--    * list of which type parameters are indices (proxy for whether they are indexed types or not)
+typeConstructors :: (?globals :: Globals) => [(Id, (Type, [Id], [Int]))]
+typeConstructors =
+  -- If we have the security levels extension turned on then include these things
+  extensionDependent [(SecurityLevels, [ (mkId "Level",    (kcoeffect, [], []))
+                                       , (mkId "Unused",   (tyCon "Level", [], []))
+                                       , (mkId "Dunno",    (tyCon "Level", [], []))])] []
+ ++
+  -- Everything else is always in scope
+    [ (mkId "Coeffect",  (Type 0, [], []))
+    , (mkId "Effect",    (Type 0, [], []))
+    , (mkId "Guarantee", (Type 0, [], []))
+    , (mkId "Permission", (Type 0, [], []))
+    , (mkId "Predicate", (Type 0, [], []))
+    , (mkId "->",     (funTy (Type 0) (funTy (Type 0) (Type 0)), [], []))
+    , (mkId ",,",     (funTy kcoeffect (funTy kcoeffect kcoeffect), [mkId ",,"], []))
+    , (mkId "Int",    (Type 0, [], []))
+    , (mkId "Float",  (Type 0, [], []))
+    , (mkId "DFloat",  (Type 0, [], [])) -- special floats that can be tracked for sensitivty
+    , (mkId "Char",   (Type 0, [], []))
+    , (mkId "Void",   (Type 0, [], []))
+    , (mkId "String", (Type 0, [], []))
+    , (mkId "Inverse", (funTy (Type 0) (Type 0), [], []))
+    -- Predicates on deriving operations:x
+    , (mkId "Dropable", (funTy (Type 0) kpredicate, [], [0]))
+    -- TODO: add deriving for this
+    -- , (mkId "Moveable", (funTy (Type 0) kpredicate, [], [0]))
+    , (mkId "Cloneable", (funTy (Type 0) kpredicate, [], [0]))
+    -- Session type related things
+    , (mkId "ExactSemiring", (funTy (tyCon "Semiring") (tyCon "Predicate"), [], []))
+    , (mkId "Mutable", (funTy (tyCon "Fraction") (tyCon "Predicate"), [], []))
+    , (mkId "NonInterfering", (funTy (tyCon "Coeffect") (tyCon "Predicate"), [], []))
+    , (mkId "Protocol", (Type 0, [], []))
+    , (mkId "SingleAction", (funTy (tyCon "Protocol") (tyCon "Predicate"), [], [0]))
+    , (mkId "ReceivePrefix", (funTy (tyCon "Protocol") (tyCon "Predicate"), [], [0]))
+    , (mkId "Sends", (funTy (tyCon "Nat") (funTy (tyCon "Protocol") (tyCon "Predicate")), [], [0]))
+    , (mkId "Graded", (funTy (tyCon "Nat") (funTy (tyCon "Protocol") (tyCon "Protocol")), [], [0]))
+    , (mkId "Rename", (funTy (tyCon "Name") (funTy (tyCon "Name") (funTy (Type 0) (Type 0))), [], [0]))
+    -- # Coeffect types
+    , (mkId "Nat",      (kcoeffect, [], []))
+    , (mkId "Q",        (kcoeffect, [], [])) -- Rationals
+    , (mkId "OOZ",      (kcoeffect, [], [])) -- 1 + 1 = 0
+    , (mkId "LNL",      (kcoeffect, [], [])) -- Linear vs Non-linear semiring
+    , (mkId "Set",      (funTy (Type 0) kcoeffect, [], [0]))
+    , (mkId "SetOp",    (funTy (Type 0) kcoeffect, [], [0]))
+    -- LNL members
+    , (mkId "Zero",     (tyCon "LNL", [], []))
+    , (mkId "One",      (tyCon "LNL", [], []))
+    , (mkId "Many",     (tyCon "LNL", [], []))
+
+    , (mkId "Cartesian", (kcoeffect, [], []))
+    , (mkId "Any", (tyCon "Cartesian", [], []))
+    -- Security levels
+
+    -- Note that Private/Public can be members of Sec (and map to Hi/Lo) or if 'SecurityLevels' is
+    -- turned on then they are part of the 'Level' semiring
+    -- Security levels
+    , (mkId "Private",  (extensionDependent [(SecurityLevels, tyCon "Level")] (tyCon "Sec"), [], []))
+    , (mkId "Public",   (extensionDependent [(SecurityLevels, tyCon "Level")] (tyCon "Sec"), [], []))
+    -- Alternate security levels (a la Gaboardi et al. 2016 and Abel-Bernardy 2020)
+    , (mkId "Sec",  (kcoeffect, [], []))
+    , (mkId "Hi",    (tyCon "Sec", [], []))
+    , (mkId "Lo",    (tyCon "Sec", [], []))
+    -- Uniqueness
+    , (mkId "Uniqueness", (kguarantee, [], []))
+    , (mkId "Unique", (tyCon "Uniqueness", [], []))
+    , (mkId "Fraction", (tyCon "Permission", [], []))
+    , (mkId "Star", (tyCon "Fraction", [], []))
+    -- Integrity
+    , (mkId "Integrity", (kguarantee, [], []))
+    , (mkId "Trusted", (tyCon "Integrity", [], []))
+    -- Other coeffect constructors
+    , (mkId "Interval", (kcoeffect .-> kcoeffect, [], []))
+    -- Channels and protocol types
+    , (mkId "Send", (funTy (Type 0) (funTy protocol protocol), [], []))
+    , (mkId "Recv", (funTy (Type 0) (funTy protocol protocol), [], []))
+    , (mkId "End" , (protocol, [], []))
+    , (mkId "Select" , (funTy protocol (funTy protocol protocol), [], []))
+    , (mkId "Offer" , (funTy protocol (funTy protocol protocol), [], []))
+    , (mkId "Chan", (funTy protocol (Type 0), [], [0]))
+    , (mkId "LChan", (funTy protocol (Type 0), [], [0]))
+    , (mkId "Dual", (funTy protocol protocol, [], [0]))
+    -- Top completion on a coeffect, e.g., Ext Nat is extended naturals (with ∞)
+    , (mkId "Ext", (funTy kcoeffect kcoeffect, [], [0]))
+    -- Effect grade types - Sessions
+    , (mkId "Session",  (tyCon "Com", [], []))
+    , (mkId "Com",      (keffect, [], []))
+    -- Effect grade types - IO
+    , (mkId "IO",       (keffect, [], []))
+
+    --Effect grade types - Exceptions
+    , (mkId "Exception", (keffect, [], []))
+    , (mkId "Success", (tyCon "Exception", [], []))
+    , (mkId "MayFail", (tyCon "Exception", [], []))
+
+     -- Free : (e : Type) -> Effect
+    , (mkId "GradedFree", (FunTy (Just $ mkId "eff") Nothing keffect
+                       (FunTy Nothing Nothing (funTy (tyVar "eff") (funTy (Type 0) (Type 0))) keffect), [], [0]))
+    , (mkId "Eff",
+         (FunTy (Just $ mkId "eff") Nothing keffect
+            (FunTy (Just $ mkId "sig") Nothing (funTy (tyVar "eff") (funTy (Type 0) (Type 0)))
+              (funTy (tyVar "eff") (TyApp (TyApp (tyCon "GradedFree") (tyVar "eff")) (tyVar "sig")))), [], [0,1]))
+
+    -- Reference types
+    , (mkId "Name", (FunTy Nothing Nothing (Type 0) (Type 0), [], []))
+    , (mkId "FloatArray", (FunTy Nothing Nothing (TyCon $ mkId "Name") (Type 0), [], []))
+    , (mkId "Ref",  (FunTy Nothing Nothing (TyCon $ mkId "Name") (FunTy Nothing Nothing (Type 0) (Type 0)), [], []))
+
+    -- Capability related things
+    , (mkId "CapabilityType", (funTy (tyCon "Capability") (Type 0), [], [0]))
+    ]
+
+-- Various predicates and functions on type operators
+closedOperation :: TypeOperator -> Bool
+closedOperation =
+  \case
+    TyOpPlus -> True
+    TyOpTimes -> True
+    TyOpMinus -> True
+    TyOpExpon -> True
+    TyOpMeet -> True
+    TyOpJoin -> True
+    TyOpInterval -> True
+    TyOpConverge -> True
+    TyOpImpl     -> True
+    _        -> False
+
+coeffectResourceAlgebraOps :: TypeOperator -> Bool
+coeffectResourceAlgebraOps =
+  \case
+    TyOpPlus -> True
+    TyOpTimes -> True
+    TyOpMeet -> True
+    TyOpJoin -> True
+    TyOpInterval -> True
+    _ -> False
+
+
+tyOps :: TypeOperator -> (Kind, Kind, Kind)
+tyOps = \case
+    TyOpLesserNat -> (kNat, kNat, kpredicate)
+    TyOpLesserEqNat -> (kNat, kNat, TyCon (mkId "Predicate"))
+    TyOpLesserEq -> (tyVar "k", tyVar "k", TyCon (mkId "Predicate"))
+    TyOpGreaterNat -> (kNat, kNat, TyCon (mkId "Predicate"))
+    TyOpGreaterEq -> (tyVar "k", tyVar "k", TyCon (mkId "Predicate"))
+    TyOpGreaterEqNat -> (kNat, kNat, TyCon (mkId "Predicate"))
+    TyOpEq -> (kNat, kNat, TyCon (mkId "Predicate"))
+    TyOpNotEq -> (kNat, kNat, TyCon (mkId "Predicate"))
+    TyOpPlus -> (kNat, kNat, kNat)
+    TyOpTimes -> (kNat, kNat, kNat)
+    TyOpMinus -> (kNat, kNat, kNat)
+    TyOpExpon -> (kNat, kNat, kNat)
+    TyOpMeet -> (kNat, kNat, kNat)
+    TyOpJoin -> (kNat, kNat, kNat)
+    TyOpInterval -> (tyVar "k", tyVar "k", tyVar "k")
+    TyOpConverge -> (kNat, kNat, kNat)
+    TyOpImpl    -> (kpredicate, kpredicate, kpredicate)
+    TyOpHsup    -> (tyVar "k", tyVar "k", kpredicate)
+    TyOpMutable    -> (tyVar "k", tyVar "k", kpredicate)
+
+dataTypes :: [DataDecl]
+dataTypes =
+    -- Special built-ins for products (which cannot be parsed)
+    [ DataDecl
+      { dataDeclSpan = nullSpanBuiltin
+      , dataDeclId   = mkId ","
+      , dataDeclTyVarCtxt = [(mkId "a", Type 0),(mkId "b", Type 0)]
+      , dataDeclKindAnn = Just (Type 0)
+      , dataDeclDataConstrs = [
+        DataConstrNonIndexed
+          { dataConstrSpan = nullSpanBuiltin
+          , dataConstrId = mkId ","
+          , dataConstrParams = [TyVar (mkId "a"), TyVar (mkId "b")]
+         }]}
+    ] ++ [ DataDecl
+      { dataDeclSpan = nullSpanBuiltin
+      , dataDeclId   = mkId "&"
+      , dataDeclTyVarCtxt = [(mkId "a", Type 0),(mkId "b", Type 0)]
+      , dataDeclKindAnn = Just (Type 0)
+      , dataDeclDataConstrs = [
+        DataConstrNonIndexed
+          { dataConstrSpan = nullSpanBuiltin
+          , dataConstrId = mkId "&"
+          , dataConstrParams = [TyVar (mkId "a"), TyVar (mkId "b")]
+         }]}
+    ] ++ builtinDataTypesParsed
+
+binaryOperators :: Operator -> NonEmpty Type
+binaryOperators = \case
+    OpPlus ->
+      funTy (TyCon $ mkId "Int") (funTy (TyCon $ mkId "Int") (TyCon $ mkId "Int"))
+      :| [funTy (TyCon $ mkId "Float") (funTy (TyCon $ mkId "Float") (TyCon $ mkId "Float"))
+        , funTy (TyCon $ mkId "DFloat") (funTy (TyCon $ mkId "DFloat") (TyCon $ mkId "DFloat"))]
+    OpMinus ->
+      funTy (TyCon $ mkId "Int") (funTy (TyCon $ mkId "Int") (TyCon $ mkId "Int"))
+      :| [funTy (TyCon $ mkId "Float") (funTy (TyCon $ mkId "Float") (TyCon $ mkId "Float"))
+        , funTy (TyCon $ mkId "DFloat") (funTy (TyCon $ mkId "DFloat") (TyCon $ mkId "DFloat"))]
+    OpTimes ->
+      funTy (TyCon $ mkId "Int") (funTy (TyCon $ mkId "Int") (TyCon $ mkId "Int"))
+      :| [funTy (TyCon $ mkId "Float") (funTy (TyCon $ mkId "Float") (TyCon $ mkId "Float"))]
+    OpDiv ->
+      funTy (TyCon $ mkId "Float") (funTy (TyCon $ mkId "Float") (TyCon $ mkId "Float")) :| []
+    OpEq ->
+      funTy (TyCon $ mkId "Int") (funTy (TyCon $ mkId "Int") (TyCon $ mkId "Bool"))
+      :| [funTy (TyCon $ mkId "Float") (funTy (TyCon $ mkId "Float") (TyCon $ mkId "Bool"))
+        , funTy (TyCon $ mkId "Char") (funTy (TyCon $ mkId "Char") (TyCon $ mkId "Bool"))
+        , funTy (TyCon $ mkId "DFloat") (funTy (TyCon $ mkId "DFloat") (TyCon $ mkId "Bool"))]
+    OpNotEq ->
+      funTy (TyCon $ mkId "Int") (funTy (TyCon $ mkId "Int") (TyCon $ mkId "Bool"))
+      :| [funTy (TyCon $ mkId "Float") (funTy (TyCon $ mkId "Float") (TyCon $ mkId "Bool"))
+        , funTy (TyCon $ mkId "DFloat") (funTy (TyCon $ mkId "DFloat") (TyCon $ mkId "Bool"))]
+    OpLesserEq ->
+      funTy (TyCon $ mkId "Int") (funTy (TyCon $ mkId "Int") (TyCon $ mkId "Bool"))
+      :| [funTy (TyCon $ mkId "Float") (funTy (TyCon $ mkId "Float") (TyCon $ mkId "Bool"))
+        , funTy (TyCon $ mkId "DFloat") (funTy (TyCon $ mkId "DFloat") (TyCon $ mkId "Bool"))]
+    OpLesser ->
+      funTy (TyCon $ mkId "Int") (funTy (TyCon $ mkId "Int") (TyCon $ mkId "Bool"))
+      :| [funTy (TyCon $ mkId "Float") (funTy (TyCon $ mkId "Float") (TyCon $ mkId "Bool"))
+        , funTy (TyCon $ mkId "DFloat") (funTy (TyCon $ mkId "DFloat") (TyCon $ mkId "Bool"))]
+    OpGreater ->
+      funTy (TyCon $ mkId "Int") (funTy (TyCon $ mkId "Int") (TyCon $ mkId "Bool"))
+      :| [funTy (TyCon $ mkId "Float") (funTy (TyCon $ mkId "Float") (TyCon $ mkId "Bool"))
+        , funTy (TyCon $ mkId "DFloat") (funTy (TyCon $ mkId "DFloat") (TyCon $ mkId "Bool"))]
+    OpGreaterEq ->
+      funTy (TyCon $ mkId "Int") (funTy (TyCon $ mkId "Int") (TyCon $ mkId "Bool"))
+      :| [funTy (TyCon $ mkId "Float") (funTy (TyCon $ mkId "Float") (TyCon $ mkId "Bool"))
+        , funTy (TyCon $ mkId "DFloat") (funTy (TyCon $ mkId "DFloat") (TyCon $ mkId "Bool"))]
+
+-- TODO make a proper quasi quoter that parses this at compile time
+builtinSrc :: String
+builtinSrc = [r|------
+--- Module: Primitives
+--- Description: Built-in primitive definitions
+------
+
+import Prelude
+
+--- # Core linear functional combinators
+
+--- Unit type
+data () = ()
+
+--- Allows a linear variable to be promoted to a graded modality
+--- specifying an exact usage of 1
+use : forall {a : Type} . a -> a [1]
+use = BUILTIN
+
+--- Linear function composition
+compose : forall {a : Type, b : Type, c : Type}
+  . (b -> c) -> (a -> b) -> (a -> c)
+compose = BUILTIN
+-- Defined in the interpreter as \g -> \f -> \x -> g (f x)
+
+--------------------------------------------------------------------------------
+--- # Arithmetic
+--------------------------------------------------------------------------------
+
+--- Integer division
+div : Int -> Int -> Int
+div = BUILTIN
+
+--------------------------------------------------------------------------------
+--- # Graded Possiblity
+--------------------------------------------------------------------------------
+
+--- Inject into a computation for any graded monad
+pure
+  : forall {a : Type}
+  . a -> a <>
+pure = BUILTIN
+
+--- Extract form a pure computation
+fromPure
+  : forall {a : Type}
+  . a <Pure> -> a
+fromPure = BUILTIN
+
+
+-------------------------------------
+--- # Algebraic effects and handlers
+--------------------------------------
+
+--- Lift a CPS-style effect operation to direct-style, also called the "generic effect" operation
+call : forall {eff : Effect, s : Semiring, grd : s, i : Type, o : Type, r : Type, sig : eff -> Type -> Type, e : eff}
+     . (i -> (o -> r) [grd] -> sig e r) -> i -> o <Eff eff sig e>
+call = BUILTIN
+
+--- Deploy an effect handler on a computation tree
+handle : forall {eff : Effect, sig : eff -> Type -> Type, a b : Type, e : eff}
+       . (fmap : (forall {a : Type} . (forall {b : Type} . (forall {l : eff} . (a -> b) [0..Inf] -> sig l a -> sig l b))) [0..Inf])
+       --- ^ functoriality of sig
+       -> (forall {l : eff} . sig l b -> b) [0..Inf]
+       -> (a -> b)
+       --- ^ (a * sig) - algebra
+       -> a <Eff eff sig e>
+       -> b
+handle = BUILTIN
+
+--- Deploy an effect handler on a computation tree for a graded algebra
+handleGr : forall {eff : Effect, sig : eff -> Type -> Type, a : Type, b : eff -> Type, e : eff}
+       . (fmap : (forall {a : Type} . (forall {b : Type} . (forall {l : eff} . (a -> b) [0..Inf] -> sig l a -> sig l b))) [0..Inf])
+       --- ^ functoriality of sig
+       -> (forall {l : eff} . (forall {j : eff} . sig l (b j) -> b (l * j)) [0..Inf])
+       -> (a -> b (1 : eff))
+       --- ^ (a * sig) - graded algebra
+       -> a <Eff eff sig e>
+       -> b e
+handleGr = BUILTIN
+
+--------------------------------------------------------------------------------
+--- # I/O
+--------------------------------------------------------------------------------
+
+--- IO effect operation information
+
+data IOElem = Stdout | Stdin | Stderr | Open | Read | Write | IOExcept | Close
+
+--- Read from standard input
+fromStdin : String <{Stdin}>
+fromStdin = BUILTIN
+
+--- Write to standard output
+toStdout : String -> () <{Stdout}>
+toStdout = BUILTIN
+
+--- Write to standard output
+toStderr : String -> () <{Stderr}>
+toStderr = BUILTIN
+
+--------------------------------------------------------------------------------
+--- # Exceptions
+--------------------------------------------------------------------------------
+
+throw : forall {a : Type, k : Coeffect} . (a [0 : k]) <MayFail>
+throw = BUILTIN
+
+--------------------------------------------------------------------------------
+--- # Conversions
+--------------------------------------------------------------------------------
+
+showChar : Char -> String
+showChar = BUILTIN
+
+intToFloat : Int -> Float
+intToFloat = BUILTIN
+
+showInt : Int -> String
+showInt = BUILTIN
+
+showFloat : Float -> String
+showFloat = BUILTIN
+
+readInt : String -> Int
+readInt = BUILTIN
+
+--------------------------------------------------------------------------------
+--- # Concurrency and Session Types
+--------------------------------------------------------------------------------
+
+
+forkLinear
+  : forall {s : Protocol}
+  . (LChan s -> ()) -> LChan (Dual s)
+forkLinear = BUILTIN
+
+send
+  : forall {a : Type, s : Protocol}
+  . LChan (Send a s) -> a -> LChan s
+send = BUILTIN
+
+recv
+  : forall {a : Type, s : Protocol}
+  . LChan (Recv a s) -> (a, LChan s)
+recv = BUILTIN
+
+close : LChan End -> ()
+close = BUILTIN
+
+selectLeft : forall {p1 p2 : Protocol}
+          . LChan (Select p1 p2) -> LChan p1
+selectLeft = BUILTIN
+
+selectRight : forall {p1 p2 : Protocol}
+            . LChan (Select p1 p2) -> LChan p2
+selectRight = BUILTIN
+
+offer : forall {p1 p2 : Protocol, a : Type}
+      . (LChan p1 -> a) -> (LChan p2 -> a) -> LChan (Offer p1 p2) -> a
+offer = BUILTIN
+
+--------------------------------------------------------------------------------
+--- # Non-linear communication and concurrency patterns
+--------------------------------------------------------------------------------
+
+forkNonLinear : forall {p : Protocol, s : Semiring, r : s}
+              . {SingleAction p, ExactSemiring s} => ((LChan p) [r] -> ()) -> (LChan (Dual p)) [r]
+forkNonLinear = BUILTIN
+
+forkMulticast : forall {p : Protocol, n : Nat}
+              . {Sends p} => (LChan (Graded n p) -> ()) -> N n -> Vec n (LChan (Dual p))
+forkMulticast = BUILTIN
+
+forkReplicate : forall {p : Protocol, n : Nat} . {ReceivePrefix p}
+              => (LChan p -> ()) [0..n] -> N n -> Vec n ((LChan (Dual p)) [0..1])
+forkReplicate = BUILTIN
+
+forkReplicateExactly : forall {p : Protocol, n : Nat} . {ReceivePrefix p}
+                  => (LChan p -> ()) [n] ->  N n -> Vec n (LChan (Dual p))
+forkReplicateExactly = BUILTIN
+
+---------------------------------
+--- # Concurrency primitives using side effects
+----------------------------------
+
+fork
+  : forall {s : Protocol, k : Coeffect, c : k}
+  . {SingleAction s, ExactSemiring k} => ((Chan s) [c] -> () <Session>) -> ((Chan (Dual s)) [c]) <Session>
+fork = BUILTIN
+
+gsend
+  : forall {a : Type, s : Protocol}
+  . Chan (Send a s) -> a -> (Chan s) <Session>
+gsend = BUILTIN
+
+grecv
+  : forall {a : Type, s : Protocol}
+  . Chan (Recv a s) -> (a, Chan s) <Session>
+grecv = BUILTIN
+
+gclose : Chan End -> () <Session>
+gclose = BUILTIN
+
+--------------------------------------------------------------------------------
+--- # File Handles
+--------------------------------------------------------------------------------
+
+data Handle : HandleType -> Type where
+
+data HandleType = R | W | A | RW
+
+-- TODO: with type level sets we could index a handle by a set of capabilities
+-- then we wouldn't need readChar and readChar' etc.
+data IOMode : HandleType -> Type where
+  ReadMode : IOMode R;
+  WriteMode : IOMode W;
+  AppendMode : IOMode A;
+  ReadWriteMode : IOMode RW
+
+openHandle
+  : forall {m : HandleType}
+  . IOMode m
+  -> String
+  -> (Handle m) <{Open,IOExcept}>
+openHandle = BUILTIN
+
+readChar : Handle R -> (Handle R, Char) <{Read,IOExcept}>
+readChar = BUILTIN
+
+readChar' : Handle RW -> (Handle RW, Char) <{Read,IOExcept}>
+readChar' = BUILTIN
+
+appendChar : Handle A -> Char -> (Handle A) <{Write,IOExcept}>
+appendChar = BUILTIN
+
+writeChar : Handle W -> Char -> (Handle W) <{Write,IOExcept}>
+writeChar = BUILTIN
+
+writeChar' : Handle RW -> Char -> (Handle RW) <{Write,IOExcept}>
+writeChar' = BUILTIN
+
+closeHandle : forall {m : HandleType} . Handle m -> () <{Close,IOExcept}>
+closeHandle = BUILTIN
+
+isEOF : Handle R -> (Handle R, Bool) <{Read,IOExcept}>
+isEOF = BUILTIN
+
+isEOF' : Handle RW -> (Handle RW, Bool) <{Read,IOExcept}>
+isEOF' = BUILTIN
+
+--------------------------------------------------------------------------------
+--- # Char
+--------------------------------------------------------------------------------
+
+-- module Char
+
+charToInt : Char -> Int
+charToInt = BUILTIN
+
+charFromInt : Int -> Char
+charFromInt = BUILTIN
+
+-- Moves
+
+moveChar : Char -> Char []
+moveChar = BUILTIN
+
+moveInt : Int -> Int []
+moveInt = BUILTIN
+
+moveString : String -> String []
+moveString = BUILTIN
+
+--------------------------------------------------------------------------------
+--- # String manipulation
+--------------------------------------------------------------------------------
+
+stringAppend : String → String → String
+stringAppend = BUILTIN
+
+stringUncons : String → Maybe (Char, String)
+stringUncons = BUILTIN
+
+stringCons : Char → String → String
+stringCons = BUILTIN
+
+stringUnsnoc : String → Maybe (String, Char)
+stringUnsnoc = BUILTIN
+
+stringSnoc : String → Char → String
+stringSnoc = BUILTIN
+
+--------------------------------------------------------------------------------
+-- Arrays
+--------------------------------------------------------------------------------
+
+-- data
+--   ArrayStack
+--     (capacity : Nat)
+--     (maxIndex : Nat)
+--     (a : Type)
+--   where
+
+-- push
+--   : ∀ {a : Type, cap : Nat, maxIndex : Nat}
+--   . {maxIndex < cap}
+--   ⇒ ArrayStack cap maxIndex a
+--   → a
+--   → ArrayStack cap (maxIndex + 1) a
+-- push = BUILTIN
+
+-- pop
+--   : ∀ {a : Type, cap : Nat, maxIndex : Nat}
+--   . {maxIndex > 0}
+--   ⇒ ArrayStack cap maxIndex a
+--   → a × ArrayStack cap (maxIndex - 1) a
+-- pop = BUILTIN
+
+-- -- Boxed array, so we allocate cap words
+-- allocate
+--   : ∀ {a : Type, cap : Nat}
+--   . N cap
+--   → ArrayStack cap 0 a
+-- allocate = BUILTIN
+
+-- swap
+--   : ∀ {a : Type, cap : Nat, maxIndex : Nat}
+--   . ArrayStack cap (maxIndex + 1) a
+--   → Fin (maxIndex + 1)
+--   → a
+--   → a × ArrayStack cap (maxIndex + 1) a
+-- swap = BUILTIN
+
+-- copyArray
+--   : ∀ {a : Type, cap : Nat, maxIndex : Nat}
+--   . ArrayStack cap maxIndex (a [2])
+--   → ArrayStack cap maxIndex a × ArrayStack cap maxIndex a
+-- copyArray = BUILTIN
+
+--------------------------------------------------------------------------------
+--- # Cost
+--------------------------------------------------------------------------------
+
+tick : () <1>
+tick = BUILTIN
+
+--------------------------------------------------------------------------------
+-- L3-style pointers (work in progress)
+--------------------------------------------------------------------------------
+
+-- data Ptr : Type -> Type where
+
+-- data Cap : Type -> Type -> Type where
+
+-- data PtrCap a where
+--   MkPtrCap : forall { id : Type } . (Ptr id) [] -> Cap a id -> PtrCap a
+
+-- newPtr
+--   : forall { a : Type }
+--   . a -> PtrCap a
+-- newPtr = BUILTIN
+
+-- newPtr'
+--   : forall { a : Type }
+--   . a -> (exists id . ((Ptr id) [], Cap a id)
+-- newPtr' = BUILTIN
+
+-- swapPtr
+--   : forall { a b : Type, id : Type }
+--   . b -> Ptr id -> Cap a id -> (a × Cap b id)
+-- swapPtr = BUILTIN
+
+-- freePtr
+--   : forall { a b : Type, id : Type }
+--   . Ptr id -> Cap a id -> a
+-- freePtr = BUILTIN
+
+--------------------------------------------------------------------------------
+--- # Uniqueness modality
+--------------------------------------------------------------------------------
+
+uniqueReturn
+  : forall {a : Type, s : Semiring, r : s}
+  . *a -> a [r]
+uniqueReturn = BUILTIN
+
+-- Provided by clone
+
+-- uniqueBind
+--   : forall {a b : Type, s : Semiring, r : s}
+--   . {(1 : s) <= r, Cloneable a}
+--  => ((exists {id : Name} . *(Rename id a)) -> b) -> a [r] -> b
+-- uniqueBind = BUILTIN
+
+reveal
+  : forall {a : Type}
+  . a *{Trusted} -> a [Lo]
+reveal = BUILTIN
+
+trustedBind
+  : forall {a b : Type}
+  . (a *{Trusted} -> b [Lo]) -> a [Lo] -> b [Lo]
+trustedBind = BUILTIN
+
+withBorrow
+  : forall {a b : Type}
+  . (& 1 a -> & 1 b) -> *a -> *b
+withBorrow = BUILTIN
+
+split
+  : forall {a : Type, f : Fraction}
+  . {f /= Star} => & f a -> (& (f * 1/2) a, & (f * 1/2) a)
+split = BUILTIN
+
+join
+  : forall {a : Type, f g : Fraction}
+  . {f /= Star, g /= Star} => (& f a, & g a) -> & (f+g) a
+join = BUILTIN
+
+borrowPush
+  : forall {a b : Type, p : Permission, f : p}
+  . & f (a, b) -> (& f a, & f b)
+borrowPush = BUILTIN
+
+borrowPull
+  : forall {a b : Type, p : Permission, f : p}
+  . (& f a, & f b) -> & f (a, b)
+borrowPull = BUILTIN
+
+--------------------------------------------------------------------------------
+--- # Mutable array operations
+--------------------------------------------------------------------------------
+
+newFloatArray : Int -> exists {id : Name} . *(FloatArray id)
+newFloatArray = BUILTIN
+
+readFloatArray : forall {p : Permission, f : p, id : Name} . & f (FloatArray id) -> Int -> (Float, & f (FloatArray id))
+readFloatArray = BUILTIN
+
+writeFloatArray : forall {id : Name, f : Fraction} . {mut f} => & f (FloatArray id) -> Int -> Float -> & f (FloatArray id)
+writeFloatArray = BUILTIN
+
+lengthFloatArray : forall {p : Permission, f : p, id : Name} . & f (FloatArray id) -> (!Int, & f (FloatArray id))
+lengthFloatArray = BUILTIN
+
+deleteFloatArray : forall {id : Name} . *(FloatArray id) -> ()
+deleteFloatArray = BUILTIN
+
+--------------------------------------------------------------------------------
+--- # Mutable reference cells
+--------------------------------------------------------------------------------
+
+newRef : forall {a : Type} . a -> exists {id : Name} . *(Ref id a)
+newRef = BUILTIN
+
+swapRef : forall {a : Type, f : Fraction, id : Name} . {mut f} => & f (Ref id a) -> a -> (a, & f (Ref id a))
+swapRef = BUILTIN
+
+freezeRef : forall {a : Type, id : Name} . *(Ref id a) -> a
+freezeRef = BUILTIN
+
+readRef : forall {a : Type, s : Semiring, q r : s, p : Permission, f : p, id : Name} . & f (Ref id (a [q+r])) -> (a [q], & f (Ref id (a [r])))
+readRef = BUILTIN
+
+--------------------------------------------------------------------------------
+--- # Immutable array operations
+--------------------------------------------------------------------------------
+
+newFloatArrayI : forall {id : Name} . Int -> (FloatArray id)
+newFloatArrayI = BUILTIN
+
+readFloatArrayI : forall {id : Name} . (FloatArray id) -> Int -> (Float, (FloatArray id))
+readFloatArrayI = BUILTIN
+
+writeFloatArrayI : forall {id : Name} . (FloatArray id) -> Int -> Float -> (FloatArray id)
+writeFloatArrayI = BUILTIN
+
+lengthFloatArrayI : forall {id : Name} . (FloatArray id) -> (Int, (FloatArray id))
+lengthFloatArrayI = BUILTIN
+
+--------------------------------------------------------------------------------
+--- # Benchmarking
+--------------------------------------------------------------------------------
+
+data BenchList where BenchGroup String BenchList BenchList ; Bench Int String (Int [] -> () <{Stdout}>) BenchList; Done
+
+mkIOBenchMain : BenchList -> () <>
+mkIOBenchMain = BUILTIN
+
+---------------------
+--- # Sensitivity
+---------------------
+
+scale : (k : Float) -> DFloat [k] -> DFloat
+scale = BUILTIN
+
+--------------------------------------------------------------------------------
+--- # Capabilities
+--------------------------------------------------------------------------------
+
+data Capability = Console | TimeDate
+
+cap : (c : Capability) -> () [{c}.] -> CapabilityType c
+cap = BUILTIN
+
+--------------------------------------------------------------------------------
+-- Additive conjunction (linear logic)
+--------------------------------------------------------------------------------
+
+-- with : forall {a b : Type} . a [0..1] -> b [0..1] -> a & b
+-- with = BUILTIN
+
+-- projL : forall {a b : Type} . a & b -> a
+-- projL = BUILTIN
+
+-- projR : forall {a b : Type} . a & b -> b
+-- projR = BUILTIN
+
+-- trace : String -> () <>
+-- trace = BUILTIN
+
+------------------------------
+-- Debugging routines
+------------------------------
+-- debug : forall {a : Type} . String -> a -> a
+-- debug = BUILTIN
+
+------------------------------
+-- Derivable operations
+------------------------------
+
+drop : forall {a : Type} . {Dropable a} => a -> ()
+drop = BUILTIN
+
+copyShape : forall {a : Type, f : Type -> Type} . f a -> (f (), f a)
+copyShape = BUILTIN
+
+|]
+
+
+builtinsParsed :: AST () ()
+builtinsParsed = case parseDefs "builtins" builtinSrc of
+        Right (ast, _) -> freshenAST ast
+        Left err -> error err
+
+builtinDataTypesParsed :: [DataDecl]
+builtins :: [(Id, TypeScheme)]
+(builtinDataTypesParsed, builtins) =
+  (types, map unDef defs)
+    where
+      AST types defs _ _ _ = builtinsParsed
+
+      unDef :: Def () () -> (Id, TypeScheme)
+      unDef (Def _ name _ _ _ (Forall _ bs cs t)) = (name, Forall nullSpanBuiltin bs cs t)
+
+-- List of primitives that can't be promoted in CBV
+unpromotables :: [String]
+unpromotables = ["newFloatArray", "newRef", "forkLinear", "forkMulticast", "forkReplicate", "forkReplicateExactly"]

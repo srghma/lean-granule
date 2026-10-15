@@ -1,0 +1,9 @@
+language GradedBase
+
+data N = S N | Z
+
+dropper : forall a .  N %(0 : Ext Nat)..(∞ : Ext Nat) -> ()
+dropper x =
+    (case x of
+      Z -> ();
+      S z -> (drop z))

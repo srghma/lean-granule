@@ -1,0 +1,8 @@
+import Vec
+
+four : N 4
+four = S (S (S (S Z)))
+
+main : Vec 4 Int
+main = range (S (S (S (S Z))))
+-- Cons -6 (Cons -5 (Cons -4 (Cons -3 Nil)))

@@ -1,0 +1,21 @@
+language GradedBase
+
+data List a = Cons a (List a) | Nil
+
+data N = S N | Z
+
+
+dropper : forall a .  N %0..∞ -> List (a) %0..∞ -> List a
+spec
+    dropper (S Z) (Cons (S Z) (Cons Z Nil)) = Cons Z Nil;
+    dropper % 0..∞
+dropper x y =
+    (case y of
+      Nil ->
+    (case x of
+      Z -> y;
+      S z -> (dropper z) y);
+      Cons p q ->
+    (case x of
+      Z -> q;
+      S x8 -> q))

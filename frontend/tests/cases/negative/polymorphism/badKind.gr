@@ -1,0 +1,2 @@
+id : ∀ {a : Nat} . Int → a
+id x = x

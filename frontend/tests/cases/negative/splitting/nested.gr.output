@@ -1,0 +1,27 @@
+Type checking failed: 
+Found a goal: frontend/tests/cases/negative/splitting/nested.gr:10:17:
+
+   Expected type is: `Vec n N`
+
+   Context:
+     x : N
+     xs : Vec n0 N
+
+   Type context:
+     n0 : Nat
+     t0 : Type
+     n : Nat
+
+   Case splits for x, xs:
+     Z      Nil           
+     Z      (Cons xs0 xs1)
+     (S x0) Nil           
+     (S x0) (Cons xs0 xs1)
+
+Found a goal: frontend/tests/cases/negative/splitting/nested.gr:11:9:
+
+   Expected type is: `Vec n N`
+
+   Type context:
+     t0 : Type
+     n : Nat

@@ -1,0 +1,18 @@
+-- Based on Figure 1 in the paper
+-- 'Towards Automatic Resource Bound Analysis for OCaml'
+
+data ABList (a : Type) (b : Type) : Nat → Nat → Type where
+  Nil : ABList a b 0 0;
+  Acons : ∀ {n : Nat, m : Nat} . a → ABList a b m n → ABList a b (m+1) n;
+  Bcons : ∀ {n : Nat, m : Nat} . b → ABList a b m n → ABList a b m (n+1)
+
+abmap : ∀ {a : Type, b : Type, c : Type, d : Type, n : Nat, m : Nat} .
+    (a → b) [m] → (c → d) [n] → ABList a c m n → ABList b d m n
+abmap [_] [_] Nil = Nil;
+abmap [f] [g] (Acons a xs) = Acons (f a) (abmap [f] [g] xs);
+abmap [f] [g] (Bcons b xs) = Bcons (g b) (abmap [f] [g] xs)
+
+import Bool
+
+main : ABList Bool Int 1 2
+main = abmap [not] [λx → x + 1] (Bcons 1 (Acons True (Bcons 0 Nil)))

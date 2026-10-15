@@ -1,0 +1,46 @@
+{-# OPTIONS_GHC -fno-warn-missing-methods #-}
+
+{-# LANGUAGE DeriveAnyClass  #-}
+{-# LANGUAGE DeriveGeneric   #-}
+
+-- | Represents fractions with star in the solver
+module Language.Granule.Checker.Constraints.SFrac where
+
+-- import Control.Monad ((<=<))
+import Data.SBV
+import GHC.Generics (Generic)
+
+newtype SFrac = SFrac { fVal  :: SFloat }
+  deriving (Generic, Mergeable)
+
+instance Show SFrac where
+  show (SFrac val) = case unliteral val of
+    Just (0) -> "*"
+    Just f    -> show f
+    _         -> "<symbolic>"
+
+star :: SFrac
+star = SFrac (literal 0)
+
+isUniq :: SFrac -> SBool
+isUniq (SFrac f) = f .== 0
+
+instance Num SFrac where
+  x + y = ite (isUniq x .|| isUniq y)
+              star
+              (SFrac (fVal x + fVal y))
+  x * y = ite (isUniq x .|| isUniq y)
+              star
+              (SFrac (fVal x * fVal y))
+  x - y = ite (isUniq x .|| isUniq y)
+              star
+              (SFrac (fVal x - fVal y))
+
+instance EqSymbolic SFrac where
+  (SFrac a) .== (SFrac b) = a .== b
+
+instance OrdSymbolic SFrac where
+  (SFrac a) .< (SFrac b) = a .== b
+
+fractionConstraint :: SFloat -> SBool
+fractionConstraint v = v .== v .&& v .<= 1 .&& v .>= 0

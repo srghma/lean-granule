@@ -1,0 +1,52 @@
+------
+--- Module: Maybe
+--- Description: Library for working with values that may be absent
+--- Authors: Vilem-Benjamin Liepelt, Dominic Orchard
+--- License: BSD3
+--- Copyright: (c) Authors 2018
+--- Issue-tracking: https://github.com/granule-project/granule/issues
+--- Repository: https://github.com/granule-project/granule
+------
+
+module Maybe where
+
+import Bool
+
+--- Type-safe null; wrap a computation that could fail
+data Maybe a = Nothing | Just a
+
+--- The maybe function takes a default value, a function, and a Maybe value.
+--- If the Maybe value is Nothing, the function returns the default value.
+--- Otherwise, it applies the function to the value inside the Just and
+--- returns the result.
+maybe : forall {a : Type, b : Type}
+      . b [0..1] -> (a -> b) [0..1] -> Maybe a -> b
+maybe [d] [_] Nothing = d;
+maybe [_] [f] (Just x) = f x
+
+--- Monad interface for Maybe
+returnMb : forall {a : Type} . a -> Maybe a
+returnMb = Just
+
+--- Monad interface for Maybe
+bindMb : forall {a : Type, b : Type}
+     . Maybe a -> (a -> Maybe b) [0..1] -> Maybe b
+bindMb Nothing [_] = Nothing;
+bindMb (Just x) [k] = k x
+
+--- The fromMaybe function takes a default value and and Maybe value. If the
+-- Maybe is Nothing, it returns the default values; otherwise, it returns the value
+-- contained in the Maybe.
+fromMaybe : forall {a : Type}
+          . a [0..1] -> Maybe a -> a
+fromMaybe [d] Nothing = d;
+fromMaybe [_] (Just x) = x
+
+--- Whether a `Maybe a` value is `Just a`
+isJust : forall {a : Type} . Maybe (a [0]) -> Bool
+isJust Nothing = False;
+isJust (Just [_]) = True
+
+--- Whether a `Maybe a` value is `Nothing`
+isNothing : forall {a : Type} . Maybe (a [0]) -> Bool
+isNothing m = not (isJust m)

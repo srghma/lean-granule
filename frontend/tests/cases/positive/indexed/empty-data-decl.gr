@@ -1,0 +1,12 @@
+-- gr --no-eval
+
+data Z where
+
+data S a where
+
+data Vec n a where
+  Nil : Vec Z a;
+  Cons : ∀ {m : Type} . a → Vec m a → Vec (S m) a
+
+test : Vec (S Z) Int
+test = Cons 1 Nil

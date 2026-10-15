@@ -1,0 +1,4 @@
+Type checking failed: 
+Falsifiable theorem: frontend/tests/cases/negative/hsup/pushZeroOne.gr:2:1:
+  The following constraint associated with `pushZeroOne` is false:
+	  (prom_[2:30]0 ≤ Zero) ∧ (prom_[2:25]0 ≤ Zero) ∧ (One ≤ prom_[2:30]0) ∧ (Zero ≤ prom_[2:25]0) ∧ (Zero ⨱ Zero)

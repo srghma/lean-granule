@@ -1,0 +1,40 @@
+-- gr --no-eval
+
+dup : Int [2] → Int
+dup [n] = n + n
+
+dup' : Int → Int
+dup' n = n * 2
+
+twice : ∀ {c : Nat} . (Int [c] → Int) [2] → Int [2*c] → Int
+twice [f] [n] = f [n] + f [n]
+
+trip : Int [3] → Int
+trip [x] = x + x + x
+
+-- main : Int
+-- main = twice [dup] [10] + twice [trip] [20]
+
+secret : Int [Private]
+secret = [4253]
+
+hash : ∀ {l : Sec} . Int [l] → Int [l]
+hash [x] = [x*x]
+
+notAleak : (Int [Hi]) [0] → Int [Lo]
+notAleak [x] = [42]
+
+-- main : Int [Private]
+-- main = hash secret
+
+doTwice : (Int <{Stdin}>) [2] → Int <{Stdin}>
+doTwice [f] =
+  let a ← f;
+      b ← f
+  in pure (a + b)
+
+readInt' : Int <{Stdin}>
+readInt' = let x <- fromStdin in pure (readInt x)
+
+main : Int <{Stdin}>
+main = doTwice [readInt']

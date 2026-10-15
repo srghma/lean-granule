@@ -1,0 +1,4 @@
+Type checking failed: 
+Falsifiable theorem: frontend/tests/cases/negative/hsup/swapBad.gr:2:1:
+  When checking `swapBad`, cannot split resource requirements into Many and Many in a pattern match. 
+Trying to prove false statement: (Many ⨱ Many)

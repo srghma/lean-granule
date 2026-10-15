@@ -1,0 +1,2 @@
+test : forall {a : Type} . a [0:Sec] -> a [0:Sec]
+test [x] = [x]

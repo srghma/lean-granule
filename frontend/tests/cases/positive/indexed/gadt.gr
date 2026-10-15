@@ -1,0 +1,14 @@
+-- gr --no-eval
+
+data Bar where
+  Bar : Bar
+data Boo where
+  Boo : Boo
+
+data Foo a where
+  MkBar : Bar → Foo Bar;
+  MkBoo : Boo → Foo Boo
+
+unwrap : ∀ {a : Type} . Foo a → a
+unwrap (MkBar x) = x;
+unwrap (MkBoo x) = x

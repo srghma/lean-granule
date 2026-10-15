@@ -1,0 +1,41 @@
+-- gr --no-eval
+
+import Maybe
+
+data BFLevel (c : Nat) a where
+  Node : a → (BFLevel c a) [0..c] → BFLevel c a;
+  Root : a → BFLevel c a
+
+label : ∀ {a : Type} . BFLevel 1 a → a
+label x =
+  case x of
+    (Node l [_]) → l;
+    (Root l)     → l
+
+--     1
+--   /  \
+--  2    3
+
+data BFTree a where
+  Empty : BFTree a;
+  Next : (BFLevel 1 a) [0..1] → BFTree a → BFTree a
+
+root : BFLevel 1 Int
+root = Root 1
+
+ex0 : BFTree Int
+ex0 = Next [Node 2 [root]] (Next [Node 3 [root]] Empty)
+
+
+last : ∀ {a : Type} . BFTree a → Maybe a
+last x =
+  case x of
+    Empty → Nothing;
+    (Next [x] Empty) → Just (label x);
+    (Next [x] xs)    → last xs
+
+exLast : Int
+exLast = fromMaybe [42] (last ex0)
+
+main : () <{Stdout}>
+main = toStdout (showInt exLast)

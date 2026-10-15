@@ -1,0 +1,7 @@
+import Vec
+
+foo : Vec 3 Int
+foo = Cons 1 (Cons 2 (Cons 3 Nil))
+
+main : Vec 3 Int
+main = map [λ(x : Int) → x * 2] foo

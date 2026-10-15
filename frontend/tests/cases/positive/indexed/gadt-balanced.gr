@@ -1,0 +1,9 @@
+-- gr --no-eval
+
+data Balanced (diff : Nat) where
+  Init : Balanced 0;
+  BOpen : Balanced diff → Balanced (diff + 1);
+  BClose : Balanced (diff + 1) → Balanced diff
+
+test : Balanced 0
+test = BClose (BOpen Init)

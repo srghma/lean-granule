@@ -1,0 +1,11 @@
+fix : ∀ {a : Type} . (a → a) [∞] → a
+fix [f] = f (fix [f])
+
+foo : Bool → Int
+foo x =
+  case x of
+    True → 0;
+    False → 1
+
+main : Int
+main = fix [foo]

@@ -1,0 +1,132 @@
+------
+--- Module: Prelude
+--- Description: Common functions for Granule programs
+--- Authors: Dominic Orchard, Vilem-Benjamin Liepelt
+--- License: BSD3
+--- Copyright: (c) Authors 2018
+--- Issue-tracking: https://github.com/granule-project/granule/issues
+--- Repository: https://github.com/granule-project/granule
+------
+
+module Prelude where
+
+import Bool
+
+--- # Standard functional components
+
+--- Identity function
+id : forall {a : Type} . a -> a
+id x = x
+
+--- Flip the order of parameters
+flip : forall {a : Type, b : Type, c : Type} . (a -> b -> c) -> b -> a -> c
+flip f x y = f y x
+
+--- Constant combinator
+--- NB: Throws away its second argument and returns the first
+const : forall {a : Type, b : Type, s : Semiring} . a -> b [0 : s] -> a
+const x [y] = x
+
+--- linear function composition (the composition operator `g ∘ f` resolves
+--- to whatever is bound to `compose`)
+lcompose : forall {a : Type, b : Type, c : Type}
+  . (b -> c) -> (a -> b) -> (a -> c)
+lcompose g f = \x -> g (f x)
+
+--- Apply f to x until p holds
+until : forall {a : Type}
+  . (a -> Bool) [1..∞] -> (a -> a) [0..∞] -> a [2..∞] -> a
+until [p] [f] [x] =
+  case p x of
+    False -> x;
+    True  -> until [p] [f] [f x]
+
+--- Conditional on integers
+--- Returns `x` if `g` is zero, else returns `y`
+if0 : forall {a : Type} . Int [0..1] -> a [0..1] -> a [0..1] -> a
+if0 g [x] [y] =
+    case g of
+      [0] -> x;
+      [_] -> y
+
+--- # Numeric functions and constants
+
+--- Given some n, return
+--- + 1 iff n is positive
+--- + -1 iff n is negative
+--- + 0 otherwise
+sign : Int [1..2] -> Int
+sign [x] = if x > 0 then 1 else if x < 0 then -1 else 0
+
+--- An approximation of pi
+pi : Float
+pi = 3.141592653589793
+
+--- An approximation of Euler's number
+e : Float
+e = 2.718281828459045
+
+--- # Combinators involving products (pairs)
+
+--- Extract the left part of a pair
+fst : forall {a : Type, b : Type, s : Semiring} . a × b [0 : s] -> a
+fst (x, [_]) = x
+
+--- Extract the right part of a pair
+snd : forall {a : Type, b : Type, s : Semiring} . a [0 : s] × b -> b
+snd ([_], y) = y
+
+--- curry converts an uncurried function to a curried function
+curry : forall {a : Type, b : Type, c : Type} .
+        (a × b -> c) -> a -> b -> c
+curry f x y = f (x, y)
+
+--- uncurry converts a curried function to a function on pairs
+uncurry : forall {a : Type, b : Type, c : Type} .
+          (a -> b -> c) -> (a × b -> c)
+uncurry f (x, y) = f x y
+
+--- # Semiring-polymorphic combinators
+
+--- Coeffectful composition
+comp : forall {k : Coeffect, n : k, m : k, a : Type, b : Type, c : Type} .
+       (b [n] -> c) -> (a [m] -> b) [n] -> a [n * m] -> c
+comp g [f] = \[x] -> g [f [x]]
+
+--- Graded necessity is an applicative functor
+boxmap : forall {a b : Type, s : Semiring, r : s} . (a -> b) [r] -> a [r] -> b [r]
+boxmap [f] [x] = [f x]
+
+--- 'Comultiplication' operation showing that graded necessity is a graded comonad
+disject : forall {a : Type, k : Semiring, n : k, m : k} . a [m * n] -> (a [n]) [m]
+disject [x] = [[x]]
+
+--- 'Counit' operation showing that graded necessity is a graded comonad
+extract : forall {a : Type, s : Semiring, r : s} . {(1 : s) <= r} => a [r] -> a
+extract [x] = x
+
+--- Push coeffects on a pair into the left and right elements. A distributive
+--- law of graded necessity over products. Note however that this is not always
+--- defined: the operation {c ⨱ c} is partial and is only defined if the semiring
+--- `k` permits this behaviour at `c`. (An example of a semiring where this is not true
+--- is for `k = LNL` and `c = 1`).
+pushPair : forall {a : Type, b : Type, k : Coeffect, c : k} . {Pushable c} => (a × b) [c] -> a [c] × b [c]
+pushPair = push @(,)
+
+--- Pull coeffects of pair elements outside of the pair
+pullPair : ∀ {a : Type, b : Type, k : Coeffect, n : k} . (a [n], b [n]) → (a, b) [n]
+pullPair = pull @(,)
+
+--- Generic copying of a value into a pair
+copy : forall {a : Type, s : Semiring} . a [(1 + 1):s] -> (a, a)
+copy [x] = (x, x)
+
+--- # Coeffect-specifc combinators
+
+--- Flatten two boxes (with Nat grading)
+flatten : forall {a : Type, n : Nat, m : Nat} . (a [n]) [m] -> a [n * m]
+flatten [[x]] = [x]
+
+--- Expand two boxes (with Nat grading)
+unflatten : forall {a : Type, n : Nat, m : Nat} . a [n*m] -> (a [n]) [m]
+unflatten [x] = [[x]]

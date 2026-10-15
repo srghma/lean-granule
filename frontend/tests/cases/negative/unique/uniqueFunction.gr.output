@@ -1,0 +1,3 @@
+Type checking failed: 
+Type error: frontend/tests/cases/negative/unique/uniqueFunction.gr:5:32:
+Expected `(!b0) -> *a` but got `*a0`

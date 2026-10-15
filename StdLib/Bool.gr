@@ -1,0 +1,74 @@
+------
+--- Module: Bool
+--- Description: Booleans and associated functions for Granule
+--- Authors: Dominic Orchard, Vilem-Benjamin Liepelt
+--- License: BSD3
+--- Copyright: (c) Authors 2018
+--- Issue-tracking: https://github.com/granule-project/granule/issues
+--- Repository: https://github.com/granule-project/granule
+------
+
+module Bool where
+
+--- # Boolean type
+
+--- Boolean
+data Bool = False | True
+
+dropB : Bool -> ()
+dropB False = ();
+dropB True = ()
+
+--- # Boolean algebra
+
+--- Logical negation
+not : Bool -> Bool
+not False = True;
+not True = False
+
+--- Logical and
+--- NB: non-strict in second argument
+and : Bool -> Bool [0..1] -> Bool
+and True  [y] = y;
+and False [_] = False
+
+--- Logical and (linear)
+--- NB: consumes both arguments
+and' : Bool -> Bool -> Bool
+and' False False = False;
+and' False True = False;
+and' True False = False;
+and' True True = True
+
+
+--- Inclusive or
+--- NB: non-strict in second argument
+or : Bool -> Bool [0..1] -> Bool
+or False [y] = y;
+or True [_] = True
+
+--- Inclusive or (linear)
+or' : Bool -> Bool -> Bool
+or' False False = False;
+or' False True = True;
+or' True False = True;
+or' True True = True
+
+--- Exclusive or
+xor : Bool -> Bool -> Bool
+xor True y = not y;
+xor False y = y
+
+--- Logical implication
+--- NB: non-strict in second argument
+impl : Bool -> Bool [0..1] -> Bool
+impl True [y] = y;
+impl False [_] = True
+
+--- Logical implication (linear)
+--- NB: strict in both arguments
+impl' : Bool -> Bool -> Bool
+impl' False False = True;
+impl' False True = True;
+impl' True False = False;
+impl' True True = True
