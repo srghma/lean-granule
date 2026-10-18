@@ -1,20 +1,31 @@
-# Summary of changes for run 0d77a82d-7fc8-492d-8699-a6d3dcb359ca
-I ported the remaining user-facing parts of Granule: the source preprocessors, the full `gr` command line, the documentation generator (`grdoc`) and the Granule→Haskell compiler (`grc`). 486 of the 487 golden tests pass, the same as before; `positive/security/level_pos3.gr` still fails.
+# Summary of changes for run 271022ac-e02f-48b8-9280-413d8bdaa7d9
+I ported the remaining synthesis features. The library and the `granule`, `grc` and `granuleTest` executables all build, and there is no `sorry` in the project. The golden tests give the same result as before: 486 of 487 pass. The one failure is still `positive/security/level_pos3.gr`. I traced it and it is not caused by the port: the Lean checker generates the same constraint Granule does, and that constraint is false. The upload has no `.known-issues` file, so I left it as it was (details in `TEST-NOTES.md`). Everything is committed and pushed.
 
-The project, the `granule`, `grc` and `granuleTest` executables, and the new unit-test files build with no `sorry`. `lake exe granuleTest` reports 486/487. Everything is committed and pushed.
+**What was ported**
+- **Cartesian synthesis (`--cart-synth`).** With `--cart-synth 1`, a candidate program is accepted only if it matches the graded program in `<file>.output`.
+- **Synthesis benchmarking (`--benchmark`, `--raw-data`).** This prints solver call counts, timings, theorem sizes and paths explored, in both the human-readable and `Measurement` formats.
+- **Search-tree output (`--synth-html`).** The rules used to build each program are recorded and written to an HTML file next to the source file.
+- **Linear Haskell synthesis (`--linear-haskell`), in the new file `Synthesis/LinearHaskell.lean`.**
+  - Granule reads Haskell with the `haskell-src-exts` library, so the port includes a small Haskell reader. It handles comments and pragmas, type signatures, `data` declarations (ordinary and GADT syntax) and equations.
+  - The flow follows Granule: Haskell types become graded types (`->` is `Many`; `%1 ->`, `->.` and `⊸` are `One`; `% m ->` is `m`). The file is type-checked, each hole is synthesised, and the result is written back to the `.hs` file. If there is nothing to synthesise, it reports "Couldn't synthesise Linear Haskell..." and exits with code 1.
+  - For example, `f :: a %1 -> a; f x = _` becomes `f x = x`, and `g :: Maybe a %1 -> Maybe a; g = _` becomes two equations, one for `Nothing` and one for `Just y`.
+- **Interactive mode (`--interactive`).** As in Granule, synthesis has no limit and pauses at each failure until a line is entered.
 
-**What's new**
-- **Literate files and ASCII/Unicode rewriting** (`Preprocessor.lean`): Markdown and LaTeX code-block extraction with Granule's error messages, `--ascii-to-unicode` / `--unicode-to-ascii` (only the Granule code inside literate files is changed), and dispatch on the file extension. The interpreter now uses this instead of its old built-in Markdown handling.
-- **Command line** (`Interpreter.lean`, `CliLib.lean`, `Cli.lean`): `lake exe granule` takes Granule's options, including `--no-eval`, `--entry-point`, `--include-path`, `--rewrite-holes` with `--hole-line`/`--hole-column`, `--synthesise`, `--ignore-holes`, `--literate-env-name`, `--keep-backup`, `--no-color`, `--help` and `--version`. Unambiguous prefixes such as `--no-ev` work, as in Granule. It also reads flags from a file's first lines (`-- gr ...`), expands glob patterns, reads standard input when no file is given, reports a missing entry point or a glob that matches nothing, and sets the exit code.
-- **Documentation generator** (`Doc.lean`, `--grdoc`): writes `docs/modules/<Module>.html`, `Primitives.html` and `index.html` from `docs/template.html`, using the `--- ` doc comments, headings and module meta-data. The type printer can now emit the HTML annotation spans this needs. I ran it on `StdLib/List.gr` and the pages came out as expected.
-- **Compiler** (`Compiler/Haskell.lean`, `Compiler/HSCodegen.lean`, `Grc.lean`): `lake exe grc FILES [--dest DIR]` type checks each file and writes a `.hs` module. Grades are erased, effects become `IO`, data types become GADTs, and unsupported constructs give Granule's error messages. It compiled the 21 files in `positive/simple`. GHC isn't available here, so I couldn't check that the generated Haskell actually compiles.
-- **Unit tests**: `PreprocessorTests.lean` and `DriverTests.lean` check flag parsing, embedded flags, the doc helpers and the generated Haskell at build time.
-- **Docs**: `RequestProject/Granule/README.md` was out of date (it said the type checker wasn't ported). I rewrote it with the current module map and the differences listed below.
+**Differences from Granule** (also listed in `RequestProject/Granule/README.md`)
+- **Linear Haskell output:** the rest of the file is left as it was, including comments and layout. Granule reprints the whole module.
+- **`%1 ->`:** read as a linear arrow.
+- **`f = e` equations:** if the definition is not rewritten, the equation is kept. Granule deletes it.
+- **Granule's output bugs are reproduced as-is:**
+  - constructor arguments in generated patterns come out reversed;
+  - `x : xs` is printed as `[x]`, dropping the tail;
+  - when the program found is a `case` on an argument, only its first branch is written.
+- **Benchmark timings** measure the Lean solver.
+- **The HTML page** has a different layout from Granule's.
 
-**Where this differs from Granule**
-- `grc` uses its own printer, so the output is valid Haskell but not laid out the way Granule's printer does it.
-- `grc` keeps a data type's type variables in their declared order; Granule's code generator reverses them.
-- The user config file `~/.granule` is replaced by a `GRANULE_FLAGS` environment variable.
-- **Not ported:** Linear Haskell synthesis (`--linear-haskell` is rejected), and the synthesis debugging, benchmarking and timestamp flags (accepted but ignored). The Haskell `runtime/` library isn't ported; code generated by `grc` imports it as is.
+**New tests** (run when the library is built)
+- `RequestProject/Granule/LinearHaskellTests.lean`: type translation, declaration parsing and end-to-end synthesis on small Haskell files.
+- `RequestProject/Granule/SynthesisOptionsTests.lean`: the new flags and synthesis options.
 
-**`level_pos3.gr`:** I checked how the solver call is built: the quantifier order, how the promotion's grade variable gets its kind, and the fact that Granule passes the original predicate to the solver rather than the rewritten one. The port matches the Haskell on each point, and the constraint it generates is still false when `l = Unused` (and when `l = Public`). I didn't change anything; `TEST-NOTES.md` still describes the case.
+## Suggested follow-up
+
+The three Linear Haskell output bugs listed above come from Granule's own code. They can produce Haskell that is wrong or ill-scoped, for example `either' e = Right x`, or `[x]` where `x : xs` was meant. I can fix them in the port if you'd prefer correct output over matching Granule exactly.
